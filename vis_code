@@ -1,0 +1,108 @@
+import numpy as np
+import open3d as o3d
+import torch
+import os
+import sys
+import glob
+import h5py
+from scipy.spatial.transform import Rotation
+from torch.utils.data import Dataset
+import vtk
+from vtk.util.numpy_support import vtk_to_numpy
+from pyevtk.hl import pointsToVTK
+from sklearn.manifold import TSNE
+from matplotlib import pyplot as plt
+import copy
+import math
+import sklearn.metrics.pairwise as met
+import torch
+
+
+def get_color_map(x):
+  colours = plt.cm.Spectral(x)
+  return colours[:, :3]
+
+
+def mesh_sphere(pcd, voxel_size, sphere_size=0.6):
+  # Create a mesh sphere
+  spheres = o3d.geometry.TriangleMesh()
+  s = o3d.geometry.TriangleMesh.create_sphere(radius=voxel_size * sphere_size)
+  s.compute_vertex_normals()
+
+  for i, p in enumerate(pcd.points):
+    si = copy.deepcopy(s)
+    trans = np.identity(4)
+    trans[:3, 3] = p
+    si.transform(trans)
+    si.paint_uniform_color(pcd.colors[i])
+    spheres += si
+  return spheres
+
+def embed_tsne(data):
+  """
+  N x D np.array data
+  """
+  tsne = TSNE(n_components=1, verbose=1, perplexity=40, n_iter=300, random_state=0)
+  tsne_results = tsne.fit_transform(data)
+  tsne_results = np.squeeze(tsne_results)
+  tsne_min = np.min(tsne_results)
+  tsne_max = np.max(tsne_results)
+  return (tsne_results-tsne_min)/(tsne_max-tsne_min) #- tsne_min) / (tsne_max - tsne_min)
+
+def get_colored_point_cloud_feature(pcd, feature, voxel_size, idx):
+  tsne_results = embed_tsne(feature)
+  color = get_color_map(tsne_results)
+  pcd.colors = o3d.utility.Vector3dVector(color)
+  #pcd.paint_uniform_color([1,0,0])
+  #pcd2 = o3d.geometry.PointCloud()
+  #pcd2.points = o3d.utility.Vector3dVector(np.asarray(pcd.points)[idx])
+  #pcd2.colors = o3d.utility.Vector3dVector(np.asarray(pcd.colors)[idx])
+  spheres = mesh_sphere(pcd, voxel_size)
+
+  return spheres, tsne_results
+
+
+
+def save_xyz_vtk2(filename, xyz, scores, idx):
+    x = np.ascontiguousarray(xyz[:,0])
+    y = np.ascontiguousarray(xyz[:,1])
+    z = np.ascontiguousarray(xyz[:,2])
+
+
+
+
+    score = np.ascontiguousarray(scores[idx,:].T)
+    #score = np.ascontiguousarray(scores)
+    pointsToVTK(filename, x,y,z, data={'x':x,
+                                       'y':y,
+                                       'z':z,
+                                       'score': score
+                                       })
+
+
+
+exp_name = 'local'
+
+reader = vtk.vtkXMLUnstructuredGridReader()
+reader.SetFileName('figure_'+exp_name+'/src.vtk.vtu')
+reader.Update()
+data = reader.GetOutput()
+points = data.GetPoints()
+x = vtk_to_numpy(points.GetData())
+
+
+src_embedding  = np.loadtxt('figure_'+exp_name+'/src_embedding.txt')
+tgt_embedding  = np.loadtxt('figure_'+exp_name+'/tgt_embedding.txt')
+scores = torch.softmax(torch.from_numpy(np.matmul(src_embedding,tgt_embedding.T)),dim=-1).numpy()
+print((scores[262,:]>0.2).sum())
+#test = embed_tsne(src_embedding)
+similarity = np.abs(met.cosine_similarity(src_embedding[:,:], tgt_embedding[:,:]))
+#similarity = torch.softmax(torch.from_numpy(similarity),dim=-1).numpy()
+
+
+#for i in range(1024):
+#    save_xyz_vtk2('figure_dcp/similarity_leg_'+str(i), x, similarity, i) 
+
+i = 352 
+save_xyz_vtk2('figure_'+exp_name+'/similarity_'+str(i)+'_', x, similarity,i)
+
